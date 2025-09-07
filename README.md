@@ -1,2 +1,11 @@
 # Pulse-I
-Pulse I is a personal robotics project aimed at creating a desktop robotic arm capable of intelligent perception and manipulation within an indoor environment. The project integrates NVIDIA hardware and software to enable the robot to see, understand, and interact with its surroundings.
+Pulse I is a personal robotics project aimed at creating a desktop robotic arm capable of intelligent perception and manipulation within an indoor environment. The project integrates state-of-the-art hardware and software to enable the robot to see, understand, and interact with its surroundings.
+
+Hardware:
+ * Jetson Orin Nano: The project's brain, this compact yet powerful computer is a high-performance platform for generative AI and robotics. It is equipped with a 1024-core NVIDIA Ampere architecture GPU and 32 Tensor Cores, providing up to 67 TOPS of AI performance for vision AI applications.
+ * RealSense D435i Camera: The robot's eyes, this camera provides high-resolution depth and RGB data. It has a wide field of view and uses a global shutter, making it ideal for capturing data on fast-moving objects or when the robot is in motion. The camera's integrated Inertial Measurement Unit (IMU) provides data on movement in 6 Degrees of Freedom (DoF) to enhance performance.
+ * Arduino Braccio Arm: The robotic arm itself, the Braccio is a fully operational manipulator that can be assembled for various tasks, such as moving objects.
+Software & Core Functionality:
+ * Object Detection and Depth Perception: Pulse I utilizes object detection, a computer vision technology that identifies objects of a certain class in digital images. This is combined with depth perception, the ability to judge how far away an object is. The system uses a trained object detection model to draw a bounding box around objects and then uses depth data from the RealSense camera to determine the object's distance in millimeters. This core functionality allows the robot to "see" an object and know how far away it is.
+ * Jetpack SDK and Isaac ROS: The project relies on the Jetpack SDK for its operating system and development environment. It also uses Isaac ROS, a collection of GPU-accelerated packages for the Robot Operating System (ROS), which streamlines the development of robotics applications on the Jetson platform.
+ * Docker Workspace: The entire software environment is managed using Docker containers. This ensures reproducibility and simplifies the deployment of complex libraries like ROS and CUDA.
