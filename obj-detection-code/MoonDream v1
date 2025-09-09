@@ -1,0 +1,120 @@
+import cv2
+import time
+import numpy as np
+import pyrealsense2 as rs
+from PIL import Image
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+
+# --- Constants ---
+W = 640
+H = 480
+
+
+# --- Helper Function for Displaying Text ---
+def draw_text_on_image(img, text, position=(20, 30), font_scale=0.7, thickness=2):
+   """Draws multi-line text with a semi-transparent background on an image."""
+   font = cv2.FONT_HERSHEY_SIMPLEX
+   text_color = (255, 255, 255) # White
+   bg_color = (0, 0, 0) # Black
+  
+   # Calculate text size for multiple lines
+   lines = text.split('\n')
+   max_width = 0
+   total_height = 0
+   line_heights = []
+
+
+   for line in lines:
+       (w, h), _ = cv2.getTextSize(line, font, font_scale, thickness)
+       max_width = max(max_width, w)
+       total_height += h + 10 # 10px spacing between lines
+       line_heights.append(h + 10)
+
+
+   # Draw background rectangle
+   x, y = position
+   cv2.rectangle(img, (x - 10, y - 20), (x + max_width + 10, y + total_height - 20), bg_color, -1, cv2.LINE_AA, 0)
+  
+   # Draw text line by line
+   current_y = y
+   for i, line in enumerate(lines):
+       cv2.putText(img, line, (x, current_y), font, font_scale, text_color, thickness, cv2.LINE_AA)
+       current_y += line_heights[i]
+
+
+
+
+# --- MoonDream Model Loading ---
+print("Loading MoonDream model...")
+model_id = "vikhyatk/moondream2"
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+moondream_model = AutoModelForCausalLM.from_pretrained(
+   model_id, trust_remote_code=True,
+   torch_dtype=torch.float16, revision="2024-05-20"
+).to("cuda")
+print("MoonDream model loaded successfully.")
+
+
+# --- RealSense Pipeline Setup ---
+print("Initializing RealSense camera...")
+pipeline = rs.pipeline()
+config = rs.config()
+config.enable_stream(rs.stream.color, W, H, rs.format.bgr8, 30)
+pipeline.start(config)
+print("RealSense camera started.")
+
+
+# --- Define the Question to Ask MoonDream ---
+# This question will be asked for every frame.
+prompt = "Describe the main object in the center of the image."
+
+
+print("Starting camera feed...")
+try:
+   while True:
+       # --- Get Frames ---
+       frames = pipeline.wait_for_frames()
+       color_frame = frames.get_color_frame()
+
+
+       if not color_frame:
+           continue
+
+
+       # --- Convert image for the model ---
+       color_image = np.asanyarray(color_frame.get_data())
+      
+       # MoonDream needs a PIL Image in RGB format
+       color_image_rgb = cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB)
+       pil_image = Image.fromarray(color_image_rgb)
+
+
+       # --- Run MoonDream Inference ---
+       # The model processes the image and the question to generate text
+       with torch.no_grad():
+           enc_image = moondream_model.encode_image(pil_image)
+           description = moondream_model.answer_question(
+               image_embeds=enc_image,
+               question=prompt,
+               tokenizer=tokenizer
+           )
+
+
+       # --- Display the results ---
+       annotated_frame = color_image.copy()
+      
+       # Use our helper function to draw the description
+       draw_text_on_image(annotated_frame, description)
+      
+       cv2.imshow("MoonDream Description", annotated_frame)
+
+
+       if cv2.waitKey(1) & 0xFF == ord('q'):
+           break
+finally:
+   # --- Cleanup ---
+   print("Stopping camera and closing windows.")
+   pipeline.stop()
+   cv2.destroyAllWindows()
