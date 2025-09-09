@@ -1,1 +1,135 @@
+import cv2
+import sys
+import os
+import time
+import numpy as np
+import pyrealsense2 as rs
+from ultralytics import YOLO
 
+
+# --- Constants ---
+W = 640
+H = 480
+
+
+# --- RealSense Pipeline Setup ---
+config = rs.config()
+config.enable_stream(rs.stream.color, W, H, rs.format.bgr8, 30)
+config.enable_stream(rs.stream.depth, W, H, rs.format.z16, 30)
+
+
+pipeline = rs.pipeline()
+profile = pipeline.start(config)
+
+
+# --- Alignment Setup ---
+align_to = rs.stream.color
+align = rs.align(align_to)
+
+
+# --- YOLOv8 Model Loading ---
+# Ensure this path is correct for your system
+model_directory = os.path.join(os.environ['HOME'], 'yolov8_rs', 'yolov8m.pt')
+model = YOLO(model_directory)
+
+
+# --- Create a color palette for different classes ---
+# This will assign a unique color to each class detected
+np.random.seed(42) # for consistent colors
+colors = np.random.randint(0, 255, size=(len(model.names), 3), dtype=np.uint8)
+
+
+
+
+while True:
+   # --- Get Frames ---
+   try:
+       frames = pipeline.wait_for_frames(timeout_ms=1000)
+   except RuntimeError:
+       print("Could not wait for frames. The device may be disconnected.")
+       break
+      
+   aligned_frames = align.process(frames)
+   color_frame = aligned_frames.get_color_frame()
+   depth_frame = aligned_frames.get_depth_frame()
+
+
+   if not color_frame or not depth_frame:
+       continue
+
+
+   # --- Convert images to numpy arrays ---
+   color_image = np.asanyarray(color_frame.get_data())
+   depth_image = np.asanyarray(depth_frame.get_data())
+  
+   # Create a copy of the color image to draw on
+   # This is the key change: we no longer use results[0].plot()
+   annotated_frame = color_image.copy()
+
+
+   # --- Run YOLOv8 inference ---
+   results = model(color_image, verbose=False) # verbose=False to clean up terminal output
+
+
+   # --- Process Detections and Draw ---
+   for r in results:
+       boxes = r.boxes
+       for box in boxes:
+           # Get bounding box coordinates
+           b = box.xyxy[0].to('cpu').detach().numpy().copy()
+           x1, y1, x2, y2 = map(int, b)
+
+
+           # Get class and confidence
+           cls_id = int(box.cls[0])
+           conf = float(box.conf[0])
+           class_name = model.names[cls_id]
+          
+           # --- Get Depth Information ---
+           # Get the center of the bounding box
+           center_x = (x1 + x2) // 2
+           center_y = (y1 + y2) // 2
+          
+           # Get the depth value in millimeters
+           distance_mm = depth_frame.get_distance(center_x, center_y) * 1000
+          
+           # --- Draw a single, combined visualization ---
+          
+           # Get a unique color for the class
+           color = colors[cls_id].tolist()
+
+
+           # Create the combined label
+           label = f"{class_name} {conf:.2f} | {distance_mm:.0f}mm"
+          
+           # Draw the bounding box
+           cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, thickness=2, lineType=cv2.LINE_AA)
+          
+           # --- Draw the label with a background for better readability ---
+           # Calculate text size
+           (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+          
+           # Draw a filled rectangle for the text background
+           cv2.rectangle(annotated_frame, (x1, y1 - h - 10), (x1 + w, y1 - 5), color, -1)
+          
+           # Put the text on top of the background
+           cv2.putText(annotated_frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), thickness=2, lineType=cv2.LINE_AA)
+          
+
+
+   # --- Display the results ---
+   # Create a visual representation of the depth map for display
+   depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.08), cv2.COLORMAP_JET)
+
+
+   cv2.imshow("Object Detection with Depth", annotated_frame)
+   cv2.imshow("Depth Map", depth_colormap)
+
+
+   if cv2.waitKey(1) & 0xFF == ord('q'):
+       break
+
+
+# --- Cleanup ---
+pipeline.stop()
+cv2.destroyAllWindows()
