@@ -1,0 +1,123 @@
+import cv2
+import time
+import numpy as np
+import pyrealsense2 as rs
+from PIL import Image # Import the Image module from Pillow
+from nanoowl.owl_predictor import OwlPredictor
+
+# --- Constants ---
+W = 640
+H = 480
+# --- CODE CORRECTION ---
+# Set the confidence threshold to 55%
+CONFIDENCE_THRESHOLD = 0.55 
+
+# --- RealSense Pipeline Setup ---
+print("Initializing RealSense camera...")
+config = rs.config()
+config.enable_stream(rs.stream.color, W, H, rs.format.bgr8, 30)
+config.enable_stream(rs.stream.depth, W, H, rs.format.z16, 30)
+
+pipeline = rs.pipeline()
+profile = pipeline.start(config)
+print("RealSense camera started.")
+
+# --- Alignment Setup ---
+align_to = rs.stream.color
+align = rs.align(align_to)
+
+# --- NanoOWL Model Loading ---
+print("Loading NanoOWL model...")
+predictor = OwlPredictor(
+    "google/owlvit-base-patch32",
+    image_encoder_engine="data/owl_image_encoder.engine"
+)
+print("Model loaded successfully.")
+
+# --- Define Text Prompts for Objects ---
+prompts = ["a cell phone", "a person's face", "a water bottle", "a keyboard"]
+
+# For efficiency, we encode the text prompts once before the main loop.
+print("Encoding text prompts...")
+text_encodings = predictor.encode_text(prompts)
+print("Text prompts encoded.")
+
+
+print("Starting camera feed...")
+try:
+    while True:
+        # --- Get Frames ---
+        frames = pipeline.wait_for_frames()
+
+        aligned_frames = align.process(frames)
+        color_frame = aligned_frames.get_color_frame()
+        depth_frame = aligned_frames.get_depth_frame()
+
+        if not color_frame or not depth_frame:
+            continue
+
+        # --- Convert images to numpy arrays ---
+        color_image = np.asanyarray(color_frame.get_data())
+        depth_image = np.asanyarray(depth_frame.get_data())
+        
+        annotated_frame = color_image.copy()
+
+        # The predictor expects a PIL Image in RGB format.
+        color_image_rgb = cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB)
+        pil_image = Image.fromarray(color_image_rgb)
+
+        # --- Run NanoOWL inference ---
+        # The CONFIDENCE_THRESHOLD is used here to filter the results.
+        output = predictor.predict(
+            image=pil_image,
+            text=prompts,
+            text_encodings=text_encodings,
+            threshold=CONFIDENCE_THRESHOLD
+        )
+
+        # --- Process Detections and Draw ---
+        labels = output.labels
+        boxes = output.boxes
+        scores = output.scores 
+        
+        for label, box, score in zip(labels, boxes, scores):
+            x1, y1, x2, y2 = map(int, box)
+
+            center_x = (x1 + x2) // 2
+            center_y = (y1 + y2) // 2
+            
+            if 0 <= center_x < W and 0 <= center_y < H:
+                distance_m = depth_frame.get_distance(center_x, center_y)
+                distance_mm = distance_m * 1000
+            else:
+                distance_mm = 0
+
+            class_name = prompts[label]
+            
+            confidence_percent = score * 100
+            
+            if distance_mm > 0:
+                display_text = f"{class_name} ({confidence_percent:.1f}%) | {distance_mm:.0f}mm"
+            else:
+                display_text = f"{class_name} ({confidence_percent:.1f}%)"
+
+            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), thickness=2)
+
+            (w, h), _ = cv2.getTextSize(display_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+            cv2.rectangle(annotated_frame, (x1, y1 - h - 10), (x1 + w, y1 - 5), (0, 255, 0), -1)
+            cv2.putText(annotated_frame, display_text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), thickness=2)
+
+
+        # --- Display the results ---
+        depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.08), cv2.COLORMAP_JET)
+
+        cv2.imshow("NanoOWL Detection with Depth", annotated_frame)
+        cv2.imshow("Depth Map", depth_colormap)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+finally:
+    # --- Cleanup ---
+    print("Stopping camera and closing windows.")
+    pipeline.stop()
+    cv2.destroyAllWindows()
